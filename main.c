@@ -16,29 +16,28 @@
 #include <errno.h>
 #include <string.h>
 #include <strings.h>
-#include <assert.h>
 #include <termios.h>
 #include <sys/types.h>
 #include <netdb.h>
 #include <regex.h>
 #include <pthread.h>
 
-#define MAX_QUEUE_CLIENTS_NUMBER 10
-#define SOCKET_CALL_ERROR -1
-#define BIND_ERROR -1
-#define PTHREAD_CREATE_SUCCESS 0
-#define ACCEPT_ERROR -1
-#define CONNECT_ERROR -1
-#define READ_ERROR -1
-#define WRITE_ERROR -1
 
-#define CLIENT_POLL_INDEX 0
-#define REMOTE_HOST_POLL_INDEX 1
+static const int MAX_QUEUE_CLIENTS_NUMBER = 10;
 
-#define LISTENING_PORT 8000
-#define LOCAL_HOST_IP "127.0.0.1"
+static const int SOCKET_CALL_ERROR = -1;
+static const int BIND_ERROR = -1;
+static const int ACCEPT_ERROR = -1;
+static const int CONNECT_HOST_ERROR = -1;
+static const int SETSOCKOPT_ERROR = -1;
 
-bool STOPPED_PROXY_SERVER = false;
+static const int LISTENING_PORT = 8000;
+
+static const int PTHREAD_CREATE_SUCCESS = 0;
+static const int CLIENT_POLL_INDEX = 0;
+static const int REMOTE_HOST_POLL_INDEX = 1;
+
+static bool STOPPED_PROXY_SERVER = false;
 
 pthread_mutex_t cacheMutex;
 pthread_mutex_t clientsNumberMutex;
@@ -51,7 +50,6 @@ static const int MAX_CLIENTS_NUMBER = 200;
 
 static const int UNDEFINED_INDEX = -1;
 
-//static const int FREE_PLACES_EXIST =;
 static const int NO_FREE_PLACE = -1;
 
 static const int EXTRA_LOTS_NUMBER = 50;
@@ -63,18 +61,14 @@ static const int IS_TERMINATED = -1;
 
 static const int FULL_REQUEST_MAX_LENGTH = 1024;
 
-static const char *PROVIDED_SERVICE = "http";
+static const char *SUPPORTED_SERVICE = "http";
 static const char *HTTP_SUPPORTED_VERSION = "1.0";
 
-static const char *SUPPORTED_URL_REGEX = "^(https?:\\/\\/)?([0-9a-zA-Z\\.-]+)([0-9\\/a-zA-Z\\.-_-]*)*$";
+static const char *URL_REGEX = "^(https?:\\/\\/)?([0-9a-zA-Z\\.-]+)([0-9\\/a-zA-Z\\.-_-]*)*$";
 
-static const int ARGUMENTS_URL_INDEX = 1;
-
-static const int MAX_MATCHES_NUMBER = 4;
+static const int REGEX_MATCHES_NUMBER = 4;
 static const int PARSE_URL_SUCCESS = 0;
 static const int PARSE_URL_FAILURE = -1;
-
-static const int CONNECT_HOST_FAILURE = -1;
 
 static const int END_OF_DATA = 0;
 static const short NO_EVENT = 0;
@@ -90,41 +84,28 @@ typedef struct Cache {
     unsigned int freeRecordsNumber;      //кол-во свободных мест (для поиска самой старой записи при надобности замещения: если == 0 и у нас коллизия, то сразу же ищем старую запись)
 } Cache;
 
-typedef enum matchesLocationsTypes {
+typedef enum matchesTypes {
     SCHEME = 1,
     HOST = 2,
     PATH = 3
-} matchesLocationsTypes;
+} matchesTypes;
 
-typedef struct structuralUrlType {
+typedef struct structuralUrl {
     char *scheme;
     char *host;
     char *path;
-} structuralUrlType;
+} structuralUrl;
 
 typedef struct ClientInfo {
-    int clientSocket;                   // == -2 -- сокет не определен изначально
-    int remoteHostSocket;               // == -2 -- сокет не определен изначально
+    int clientSocket;
+    int remoteHostSocket;
     bool isWaitingForResponse;
     bool isRequestSent;
     int cacheRecordIndex;
     bool isResponseReceived;
-    structuralUrlType *URL;
+    structuralUrl *URL;
     char *response;
 } ClientInfo;
-
-//typedef struct TrackingClient {
-//    int clientPollIndex;
-//    int remoteHostPollIndex;
-//    int cacheRecordIndex;
-//    ClientInfo *info;
-//} TrackingClient;
-
-//typedef struct ClientNode {
-//    TrackingClient *client;
-//    struct ClientNode *prev;
-//    struct ClientNode *next;
-//} ClientNode;
 
 typedef struct Client {
     ClientInfo *info;
@@ -163,10 +144,6 @@ bool hasHttpRequestBeenSent(const bool hasRequestSent) {
     return hasRequestSent == true;
 }
 
-bool isFullResponseReceived(const bool isResponseReceived) {
-    return isResponseReceived == true;
-}
-
 bool isNewConnectionRequest(const short event) {
     return POLLIN & event;
 }
@@ -179,17 +156,9 @@ bool isHostReadyToReceiveRequest(const short event) {
     return (POLL_OUT & event) | (POLLWRBAND & event) | (POLLWRNORM & event);
 }
 
-bool isClientReadyToReceiveData(const short event) {
-    return (POLL_OUT & event) | (POLLWRBAND & event) | (POLLWRNORM & event);
-}
-
 bool isThereFreePlaceForAcceptingClient(int trackedDescNumber, int totalClientsNumber) {
     return (trackedDescNumber - 1) / 2 < totalClientsNumber;
 }
-
-//bool areUnprocessedTrackedClients(ClientNode *clientNode) {
-//    return clientNode != NULL;
-//}
 
 bool isSocketDescUnavailable(const short event) {
     return POLL_ERR & event || POLL_HUP & event || POLLNVAL & event;
@@ -203,23 +172,15 @@ bool serverMustBeStopped() {
     return STOPPED_PROXY_SERVER == true;
 }
 
-void logError(const char *msg) {
-    perror(msg);
-}
-
-void logInfo(const char *msg) {
-    printf("%s", msg);
-}
-
-void printDescribingErrorNumberMessage(const int errorNumber) {
-    const int ERROR_DESCRIPTION_MESSAGE_MAX_SIZE = 256;
-    char errorDescriptionMessage[ERROR_DESCRIPTION_MESSAGE_MAX_SIZE];
-    int strerrorResult;
-    strerrorResult = strerror_r(errorNumber, errorDescriptionMessage, ERROR_DESCRIPTION_MESSAGE_MAX_SIZE);
-    if (isErrorOccurred(strerrorResult)) {
-        fprintf(stderr, "Failed to print error code [%d] description message", errorNumber);
+void printErrnoMsg(const int errorCode) {
+    const int MSG_MAX_SIZE = 256;
+    char errMsg[MSG_MAX_SIZE];
+    int resultCode;
+    resultCode = strerror_r(errorCode, errMsg, MSG_MAX_SIZE);
+    if (isErrorOccurred(resultCode)) {
+        fprintf(stderr, "STRERROR_R_FAILURE: errno msg %d couldn't be printed.", errorCode);
     } else {
-        fprintf(stderr, "Failed. Error message by code [%d]: %s\n", errorNumber, errorDescriptionMessage);
+        fprintf(stderr, "Something failed: errno = %d, msg: %s\n", errorCode, errMsg);
     }
 }
 
@@ -238,7 +199,8 @@ int initServer() {
     }
 
     int reuseAddrFlag = 1;
-    if (setsockopt(proxyServerDesc, SOL_SOCKET, SO_REUSEADDR, &reuseAddrFlag, sizeof(reuseAddrFlag)) == -1) {
+    if (setsockopt(proxyServerDesc, SOL_SOCKET, SO_REUSEADDR, &reuseAddrFlag, sizeof(reuseAddrFlag)) ==
+        SETSOCKOPT_ERROR) {
         printf("SET_SOCKET_OPT_ERROR");
         exit(EXIT_FAILURE);
     }
@@ -258,68 +220,64 @@ int initServer() {
     return proxyServerDesc;
 }
 
-void destroyStructuralUrl(structuralUrlType *structuralUrl) {
-    assert(NULL != structuralUrl);
-    free(structuralUrl->scheme);
-    free(structuralUrl->host);
-    free(structuralUrl->path);
+void destroyStructuralUrl(structuralUrl *url) {
+    free(url->scheme);
+    free(url->host);
+    free(url->path);
 }
 
-void initStructuralUrl(structuralUrlType *const structuralUrl) {
-    assert(NULL != structuralUrl);
-    structuralUrl->scheme = NULL;
-    structuralUrl->host = NULL;
-    structuralUrl->path = NULL;
+void initStructuralUrl(structuralUrl *const url) {
+    url->scheme = NULL;
+    url->host = NULL;
+    url->path = NULL;
 }
 
-int parseUrlToStructural(const char *const url, structuralUrlType *const resultStructuralUrl) {
-    assert(NULL != url);
-    assert(NULL != resultStructuralUrl);
-    initStructuralUrl(resultStructuralUrl);
+int parseUrl(const char *const url, structuralUrl *const resultUrl) {
+    initStructuralUrl(resultUrl);
 
     regex_t compiledRegex;
-    int compileRegexResult;
-    compileRegexResult = regcomp(&compiledRegex, SUPPORTED_URL_REGEX, REG_EXTENDED);
-    if (isErrorOccurred(compileRegexResult)) {
-        printDescribingErrorNumberMessage(compileRegexResult);
+    int resultCode;
+    resultCode = regcomp(&compiledRegex, URL_REGEX, REG_EXTENDED);
+    if (isErrorOccurred(resultCode)) {
+        printErrnoMsg(resultCode);
         return PARSE_URL_FAILURE;
     }
 
-    regmatch_t matchesLocations[MAX_MATCHES_NUMBER];
-    const int DEFAULT_FLAGS = 0;
-    bool areThereMatches = regexec(&compiledRegex, url, MAX_MATCHES_NUMBER, matchesLocations, DEFAULT_FLAGS);
+    regmatch_t matchBeginIndexes[REGEX_MATCHES_NUMBER];
+    int regexecFlags = 0;
+    resultCode = regexec(&compiledRegex, url, REGEX_MATCHES_NUMBER, matchBeginIndexes, regexecFlags);
 
-    if (areThereMatches == REG_NOMATCH) {
-        fprintf(stderr, "Syntax error has occurred in entered url [%s]\n", url);
+    if (resultCode == REG_NOMATCH) {
+        fprintf(stderr, "SYNTAX_ERROR: incorrect url - %s\n", url);
         return PARSE_URL_FAILURE;
     }
 
-    for (matchesLocationsTypes matchType = SCHEME; matchType <= PATH; ++matchType) {
-        int startPosition = matchesLocations[matchType].rm_so;
-        int endPosition = matchesLocations[matchType].rm_eo;
+    for (matchesTypes matchType = SCHEME; matchType <= PATH; ++matchType) {
+        int beginPosIndex = matchBeginIndexes[matchType].rm_so;
+        int endPosIndex = matchBeginIndexes[matchType].rm_eo;
 
-        char *requiredData = NULL;
-        if (startPosition != endPosition) {
-            int matchLength = endPosition - startPosition;
-            requiredData = (char *) malloc(matchLength + 1);
-            if (!isMemoryAllocated(requiredData)) {
-                printDescribingErrorNumberMessage(errno);
-                destroyStructuralUrl(resultStructuralUrl);
+        char *matchedDataPart = NULL;
+        if (beginPosIndex != endPosIndex) {
+            int dataPartLen = endPosIndex - beginPosIndex;
+            matchedDataPart = (char *) malloc(dataPartLen + 1);
+            if (!isMemoryAllocated(matchedDataPart)) {
+                printErrnoMsg(errno);
+                destroyStructuralUrl(resultUrl);
                 return PARSE_URL_FAILURE;
             }
-            strncpy(requiredData, url + startPosition, matchLength);
-            requiredData[matchLength] = '\0';
+            strncpy(matchedDataPart, url + beginPosIndex, dataPartLen);
+            matchedDataPart[dataPartLen] = '\0';
         }
 
         switch (matchType) {
             case SCHEME:
-                resultStructuralUrl->scheme = requiredData;
+                resultUrl->scheme = matchedDataPart;
                 break;
             case HOST:
-                resultStructuralUrl->host = requiredData;
+                resultUrl->host = matchedDataPart;
                 break;
             case PATH:
-                resultStructuralUrl->path = requiredData;
+                resultUrl->path = matchedDataPart;
                 break;
             default:
                 break;
@@ -329,78 +287,42 @@ int parseUrlToStructural(const char *const url, structuralUrlType *const resultS
 }
 
 int connectToRemoteHost(const char *const hostUrl) {
-    assert(NULL != hostUrl);
+    struct addrinfo selectedHints;
+    struct addrinfo *foundHostAddress = NULL;
 
-    struct addrinfo selectingAddressCriteria;
-    struct addrinfo *resultHostAddress = NULL;
+    memset(&selectedHints, 0, sizeof(selectedHints));
+    selectedHints.ai_family = AF_UNSPEC;
+    selectedHints.ai_socktype = SOCK_STREAM;
 
-    memset(&selectingAddressCriteria, 0, sizeof(selectingAddressCriteria));
-    selectingAddressCriteria.ai_family = AF_UNSPEC;
-    selectingAddressCriteria.ai_socktype = SOCK_STREAM;
-
-    int getAddressResult;
-    getAddressResult = getaddrinfo(hostUrl, PROVIDED_SERVICE, &selectingAddressCriteria, &resultHostAddress);
-    if (isErrorOccurred(getAddressResult)) {
-        fprintf(stderr, "%s\n", gai_strerror(getAddressResult));
-        if (isMemoryAllocated(resultHostAddress)) {
-            freeaddrinfo(resultHostAddress);
+    int resultCode;
+    resultCode = getaddrinfo(hostUrl, SUPPORTED_SERVICE, &selectedHints, &foundHostAddress);
+    if (isErrorOccurred(resultCode)) {
+        fprintf(stderr, "%s\n", gai_strerror(resultCode));
+        if (isMemoryAllocated(foundHostAddress)) {
+            freeaddrinfo(foundHostAddress);
         }
-        return CONNECT_HOST_FAILURE;
+        return CONNECT_HOST_ERROR;
     }
 
-    int hostSocket = socket(resultHostAddress->ai_family, resultHostAddress->ai_socktype,
-                            resultHostAddress->ai_protocol);
+    int hostSocket = socket(foundHostAddress->ai_family, foundHostAddress->ai_socktype,
+                            foundHostAddress->ai_protocol);
 
-    if (hostSocket == CONNECT_HOST_FAILURE) {
-        printDescribingErrorNumberMessage(errno);
-        freeaddrinfo(resultHostAddress);
-        return CONNECT_HOST_FAILURE;
+    if (hostSocket == CONNECT_HOST_ERROR) {
+        printErrnoMsg(errno);
+        freeaddrinfo(foundHostAddress);
+        return CONNECT_HOST_ERROR;
     }
 
-    int connectResult;
-    connectResult = connect(hostSocket, resultHostAddress->ai_addr, resultHostAddress->ai_addrlen);
-    freeaddrinfo(resultHostAddress);
-    if (isErrorOccurred(connectResult)) {
-        printDescribingErrorNumberMessage(errno);
+    resultCode = connect(hostSocket, foundHostAddress->ai_addr, foundHostAddress->ai_addrlen);
+    freeaddrinfo(foundHostAddress);
+    if (isErrorOccurred(resultCode)) {
+        printErrnoMsg(errno);
         close(hostSocket);
-        return CONNECT_HOST_FAILURE;
+        return CONNECT_HOST_ERROR;
     }
 
     return hostSocket;
 }
-
-
-//void addNewClientToTrackedClientsList(ClientNode **clients, int clientSocket, int clientPollIndex) {
-//    ClientNode *newNode = (ClientNode *) calloc(1, sizeof(ClientNode));
-//    newNode->prev = NULL;
-//    newNode->next = NULL;
-//    newNode->client = (TrackingClient *) calloc(1, sizeof(TrackingClient));
-//
-//    newNode->client->cacheRecordIndex = UNDEFINED_INDEX;
-//    newNode->client->clientPollIndex = clientPollIndex;
-//    newNode->client->info = (ClientInfo *) calloc(1, sizeof(ClientInfo));
-//
-//    newNode->client->info->URL = (structuralUrlType *) calloc(1, sizeof(structuralUrlType));
-//
-//    // initialize response pointer here to use the function strcat() next without errors handling
-//    newNode->client->info->response = (char *) malloc(sizeof(char));
-//    newNode->client->info->response[0] = '\0';
-//
-//    newNode->client->info->clientSocket = clientSocket;
-//    newNode->client->info->isWaitingForResponse = false;
-//    newNode->client->info->isRequestSent = false;
-//    newNode->client->info->isResponseReceived = false;
-//
-//    if (*clients == NULL) {
-//    } else {
-//        newNode->next = *clients;
-//        (*clients)->prev = newNode;
-//    }
-//
-//    *clients = newNode;
-//    printf("\n\tNew client is added to the Clients_List.\n");
-//}
-//
 
 void freeClientInfo(Client *client) {
     free(client->info->response);
@@ -408,68 +330,6 @@ void freeClientInfo(Client *client) {
 
     free(client->info);
 }
-//
-//void deleteTerminatedClients(struct pollfd *pollDescriptors, ClientNode **head) {
-//    assert(head != NULL);
-//
-//    ClientNode *curNode = *head;
-//    ClientNode *tmp = NULL;
-//    TrackingClient *client;
-//
-//    while (curNode != NULL) {
-//
-//        if (curNode->prev == NULL && curNode->next == NULL) {
-//            if (pollDescriptors[curNode->client->clientPollIndex].fd == IS_TERMINATED) {
-//                freeClientInfo(*head);
-//                free((*head)->client);
-//                free(*head);
-//                *head = NULL;
-//                break;
-//            }
-//        }
-//
-//        client = curNode->client;
-//
-//        if (pollDescriptors[client->clientPollIndex].fd == IS_TERMINATED) {
-//            tmp = curNode;
-//
-//            if (curNode->prev != NULL) {
-//                curNode->prev->next = curNode->next;
-//            }
-//
-//            if (curNode->next != NULL) {
-//                curNode->next->prev = curNode->prev;
-//            }
-//
-//            curNode = curNode->next;
-//
-//            freeClientInfo(tmp);
-//            free(tmp->client);
-//            free(tmp);
-//
-//            continue;
-//        }
-//
-//        curNode = curNode->next;
-//
-//    }
-//
-//    printf("ClientsList was updated.\n");
-//
-//}
-//
-//void freeClientsList(ClientNode **head) {
-//    ClientNode *curNode = *head;
-//    ClientNode *nextNode = NULL;
-//    while (curNode != NULL) {
-//        nextNode = curNode->next;
-//        free(curNode->client);
-//        free(curNode);
-//        curNode = nextNode;
-//    }
-//
-//    free(*head);
-//}
 
 Cache *initCache() {
     Cache *cache = (Cache *) malloc(sizeof(Cache));
@@ -561,7 +421,7 @@ int addNewResponsePart(Cache *cache, const int recordIndex, char *newResponsePar
     }
 
     if (!isMemoryAllocated(cache->records[recordIndex]->response)) {
-        printDescribingErrorNumberMessage(errno);
+        printErrnoMsg(errno);
         return EXIT_FAILURE;
     }
 
@@ -590,7 +450,7 @@ Client *createNewClient(int clientSocket, Cache **cache) {
     client->info = (ClientInfo *) malloc(sizeof(ClientInfo));
     client->info->cacheRecordIndex = UNDEFINED_INDEX;
 
-    client->info->URL = (structuralUrlType *) malloc(sizeof(structuralUrlType));
+    client->info->URL = (structuralUrl *) malloc(sizeof(structuralUrl));
 
     // initialize response pointer here to use the function strcat() next without errors handling
     client->info->response = (char *) malloc(sizeof(char));
@@ -615,7 +475,6 @@ void sigIntHandler(int sig) {
     STOPPED_PROXY_SERVER = true;
 }
 
-// todo: one "*" or two for args?
 void *clientHandler(void *args) {
 
     printf("\nNew thread was successfully created.\n");
@@ -644,8 +503,6 @@ void *clientHandler(void *args) {
     pollDescriptors[CLIENT_POLL_INDEX].fd = clientInfo->clientSocket;
     pollDescriptors[CLIENT_POLL_INDEX].events = POLL_IN;
 
-    long iterCount = 0;
-
     while (true) {
 
         int pollStatus;
@@ -661,11 +518,7 @@ void *clientHandler(void *args) {
             break;
         }
 
-//        printf("Starting to process poll_revents. Iteration Number = %ld.\n", ++iterCount);
-
         short int clientRevent = pollDescriptors[CLIENT_POLL_INDEX].revents;
-
-//        printf("Some events happened\n");
 
         // client has terminated
         if (isSocketDescUnavailable(clientRevent)) {
@@ -686,10 +539,9 @@ void *clientHandler(void *args) {
         if (hasClientSentData(clientRevent)) {
             int totalReadSymbols = read(clientInfo->clientSocket, readDataBuffer, BUFFER_SIZE - 1);
 
+            // notify client about an occurred error
             if (isIOErrorOccurred(totalReadSymbols)) {
-                printDescribingErrorNumberMessage(errno);
-
-                // notify client about an occurred error
+                printErrnoMsg(errno);
                 clientInfo->isWaitingForResponse = true;
                 clientInfo->response = "ERROR: socket read error.";
                 clientInfo->isResponseReceived = true;
@@ -701,12 +553,11 @@ void *clientHandler(void *args) {
             readDataBuffer[totalReadSymbols] = '\0';
 
             // for this step we have already got NOT PARSED URL from client
-            structuralUrlType structuralUrl;
-            int parseUrlResult = parseUrlToStructural(readDataBuffer, &structuralUrl);
+            structuralUrl structuralUrl;
+            int parseUrlResult = parseUrl(readDataBuffer, &structuralUrl);
 
             // notify client about an occurred error
             if (isErrorOccurred(parseUrlResult)) {
-                // notify client about an occurred error
                 clientInfo->isWaitingForResponse = true;
                 clientInfo->isResponseReceived = true;
                 clientInfo->response = "ERROR: bad_url.";
@@ -725,7 +576,7 @@ void *clientHandler(void *args) {
                                                   strlen((*cache)->records[urlHash]->response));
 
                     if (isIOErrorOccurred(totalWriteSymbols)) {
-                        printDescribingErrorNumberMessage(errno);
+                        printErrnoMsg(errno);
                         printf("WRITE_CLIENT_SOCKET_FAILURE: client - %d.\n", clientInfo->clientSocket);
                         close(clientInfo->clientSocket);
                         break;
@@ -773,13 +624,11 @@ void *clientHandler(void *args) {
             // that why we don't track him until the time when response will not be received by proxy from the remote host
             pollDescriptors[CLIENT_POLL_INDEX].events = NO_EVENT;
             pollDescriptors[CLIENT_POLL_INDEX].revents = NO_REVENT;
-//                pollDescriptors[client->clientPollIndex].events = POLL_OUT | POLLWRBAND | POLLWRNORM;
 
             int remoteHostSocket = connectToRemoteHost(structuralUrl.host);
 
-            if (CONNECT_HOST_FAILURE == remoteHostSocket) {
-//                    destroyStructuralUrl(&structuralUrl);
-                printf("CONNECT_HOST_FAILURE: client - %d.\n", clientInfo->clientSocket);
+            if (CONNECT_HOST_ERROR == remoteHostSocket) {
+                printf("CONNECT_HOST_ERROR: client - %d.\n", clientInfo->clientSocket);
 
                 clientInfo->isWaitingForResponse = true;
                 clientInfo->isResponseReceived = true;
@@ -812,26 +661,27 @@ void *clientHandler(void *args) {
             if (!hasHttpRequestBeenSent(clientInfo->isRequestSent)) {
                 if (isHostReadyToReceiveRequest(pollDescriptors[REMOTE_HOST_POLL_INDEX].revents)) {
                     // sending http-request (GET)
-                    fprintf(stdout, "Sending request...\n");
+                    printf("Sending request...\n");
                     char *requestedPath = "/";
                     if (isMemoryAllocated(clientInfo->URL->path)) {
                         requestedPath = clientInfo->URL->path;
                     }
 
                     char fullRequest[FULL_REQUEST_MAX_LENGTH];
-                    sprintf(fullRequest, "GET %s HTTP/%s\r\n"
-                                         "Host: %s\r\n"
-                                         "Connection: close\r\n"
-                                         "\r\n", requestedPath, HTTP_SUPPORTED_VERSION,
+                    sprintf(fullRequest,
+                            "GET %s HTTP/%s\r\n"
+                            "Host: %s\r\n"
+                            "Connection: close\r\n"
+                            "\r\n", requestedPath, HTTP_SUPPORTED_VERSION,
                             clientInfo->URL->host);
 
-                    fprintf(stdout, "FULL_REQUEST: %s\n", fullRequest);
+                    printf("FULL_REQUEST: %s\n", fullRequest);
 
                     int totalWriteSymbols = write(clientInfo->remoteHostSocket, fullRequest,
                                                   strlen(fullRequest));
 
                     if (isIOErrorOccurred(totalWriteSymbols)) {
-                        printDescribingErrorNumberMessage(errno);
+                        printErrnoMsg(errno);
                         printf("WRITE_REMOTE_HOST_FAILURE: remote host - %d.\n",
                                clientInfo->remoteHostSocket);
 
@@ -867,7 +717,7 @@ void *clientHandler(void *args) {
 
                         // error occurred
                         if (isIOErrorOccurred(totalReadSymbols)) {
-                            printDescribingErrorNumberMessage(errno);
+                            printErrnoMsg(errno);
                             fflush(stdout);
 
                             close(clientInfo->remoteHostSocket);
@@ -890,11 +740,9 @@ void *clientHandler(void *args) {
                             int resultCode = addNewResponsePart(*cache, clientInfo->cacheRecordIndex, readDataBuffer);
 
                             if (resultCode == EXIT_FAILURE) {
-                                // todo: check this block                               close(client->info->remoteHostSocket);
                                 printf("\nRemote socket was closed.\n");
                                 pollDescriptors[REMOTE_HOST_POLL_INDEX].fd = IS_TERMINATED;
                                 pollDescriptors[REMOTE_HOST_POLL_INDEX].revents = NO_REVENT;
-
 
                                 // notify client about an occurred error
                                 clientInfo->response = "ERROR: failed to allocate memory.";
@@ -909,7 +757,7 @@ void *clientHandler(void *args) {
                                                           strlen(readDataBuffer));
 
                             if (isIOErrorOccurred(totalWriteSymbols)) {
-                                printDescribingErrorNumberMessage(errno);
+                                printErrnoMsg(errno);
                                 printf("WRITE_CLIENT_SOCKET_FAILURE: client - %d.\n",
                                        clientInfo->clientSocket);
 
@@ -968,8 +816,6 @@ int main(int argc, char **argv) {
 
     signal(SIGINT, sigIntHandler);
 
-//    long iterCount = 0;
-
     Cache *cache = initCache();
 
     int proxyListeningSocket = initServer();
@@ -991,13 +837,8 @@ int main(int argc, char **argv) {
     pollDescriptors[ACCEPT_DESC_INDEX].events = POLLIN;
 
     int timeout = (10 * 60 * 1000); // 10 min -- in msec
-    bool someClientsTerminated = false;
 
-    char readDataBuffer[BUFFER_SIZE];
-
-    // create tracked clients list
-//    ClientNode *clients = NULL;
-    int newClientSocket = -1;
+    int newClientSocket;
     printf("Proxy server start to work.\n");
 
     pthread_t clients[MAX_CLIENTS_NUMBER];
@@ -1005,8 +846,7 @@ int main(int argc, char **argv) {
     pthread_mutex_init(&cacheMutex, NULL);
     pthread_mutex_init(&cacheMutex, NULL);
 
-    /* Loop waiting for incoming connects or for incoming data   */
-    /* on any of the connected sockets.                          */
+    /* Loop waiting for incoming connects */
     while (true) {
 
         if (serverMustBeStopped()) {
@@ -1027,7 +867,7 @@ int main(int argc, char **argv) {
 
         // in the error case
         if (isIOErrorOccurred(pollStatus)) {
-            printDescribingErrorNumberMessage(errno);
+            printErrnoMsg(errno);
             STOPPED_PROXY_SERVER = true;
             printf("SERVER HAS STOPPED...\n");
             break;
@@ -1040,8 +880,6 @@ int main(int argc, char **argv) {
             printf("SERVER HAS STOPPED...\n");
             break;
         }
-
-//        printf("Starting to process poll_revents. Iteration Number = %ld.\n", ++iterCount);
 
         /* Accept all incoming connections that are            */
         /* queued up on the listening socket before we         */
@@ -1077,17 +915,10 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            /* Add the new incoming connection to the            */
-            /* pollfd structure                                  */
-
-            // add new client to the head of list
-//            addNewClientToTrackedClientsList(&clients, newClientSocket, trackedDescNumber);
-            printf("New tracked client added to the list (socket %d).\n", newClientSocket);
-
             Client *client = createNewClient(newClientSocket, &cache);
 
             if (!isMemoryAllocated(client)) {
-                printDescribingErrorNumberMessage(errno);
+                printErrnoMsg(errno);
                 close(newClientSocket);
                 continue;
             }
@@ -1110,7 +941,6 @@ int main(int argc, char **argv) {
 
     }
 
-//    freeClientsList(&clients);
     freeCache(cache);
     free(pollDescriptors);
     pthread_mutex_destroy(&cacheMutex);
